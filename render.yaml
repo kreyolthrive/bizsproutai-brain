@@ -9,6 +9,8 @@ services:
         sync: false
       - key: BRAIN_API_TOKEN
         sync: false
+      - key: BRAIN_REQUEST_SIGNING_KEY
+        sync: false
       - key: PAYLOAD_ENCRYPTION_KEY
         sync: false
       - key: ALLOWED_ORIGINS
