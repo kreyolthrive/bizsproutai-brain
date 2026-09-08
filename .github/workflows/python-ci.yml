@@ -6,6 +6,7 @@ on:
       - main
       - staging
       - "release/**"
+      - "security/**"
   pull_request:
     branches:
       - main
@@ -21,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
@@ -29,9 +32,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pip-audit
+          pip install pip-audit bandit
       - name: Dependency vulnerability audit
         run: pip-audit -r requirements.txt
+      - name: Static security audit
+        run: bandit -q -r main.py security -x security_smoke_test.py
       - name: Syntax check
         run: python -m py_compile main.py security/*.py security_smoke_test.py
       - name: Smoke test FastAPI app import and security gates
@@ -41,4 +46,26 @@ jobs:
         env:
           OPENAI_API_KEY: "mock-key-for-ci"
           BRAIN_API_TOKEN: "mock-service-token-for-ci"
+          BRAIN_REQUEST_SIGNING_KEY: "mock-brain-request-signing-key-for-ci-minimum-32-bytes"
           PAYLOAD_ENCRYPTION_KEY: "mock-payload-encryption-key-for-ci-minimum-32-bytes"
+      - name: Install Gitleaks
+        shell: bash
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          download="$RUNNER_TEMP/$archive"
+          curl -fsSL -o "$download" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$download" | sha256sum -c -
+          tar -xzf "$download" -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Scan complete Git history for secrets
+        run: |
+          mkdir -p test-results
+          gitleaks git . --log-opts="--all" --redact=100 --no-banner --report-format json --report-path test-results/gitleaks-history.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: brain-security-results
+          path: test-results/
