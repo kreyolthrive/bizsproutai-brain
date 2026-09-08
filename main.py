@@ -9,6 +9,8 @@ from collections import defaultdict
 import json
 import time
 import os
+from security.cert_pinning import create_pinned_async_client
+from security.field_encryption import decrypt_sensitive_field, is_encrypted_field
 
 # Load environment variables from .env file
 load_dotenv()
@@ -17,7 +19,11 @@ load_dotenv()
 app = FastAPI(title="BizSproutAI Brain API")
 
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45.0"))
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT)
+client = AsyncOpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    timeout=OPENAI_TIMEOUT,
+    http_client=create_pinned_async_client(timeout=OPENAI_TIMEOUT),
+)
 
 allowed_origins_env = os.getenv(
     "ALLOWED_ORIGINS",
@@ -39,6 +45,7 @@ RATE_LIMIT_WINDOW = 60  # 60 seconds
 MAX_REQUESTS_PER_WINDOW = 10  # Max 10 requests per minute per IP
 LAST_CLEANUP_TIME = time.time()
 CLEANUP_INTERVAL = 300  # Prune expired IP records every 5 minutes
+MAX_HISTORY_CAP = 10000  # Hard ceiling to prevent in-memory rate limit memory leaks
 
 def get_real_client_ip(req: Request) -> str:
     # 1. Cloudflare Connecting IP header (highest trust when routed via Cloudflare)
@@ -59,7 +66,7 @@ def get_real_client_ip(req: Request) -> str:
 
 def cleanup_stale_history(now: float):
     global LAST_CLEANUP_TIME
-    if now - LAST_CLEANUP_TIME > CLEANUP_INTERVAL:
+    if now - LAST_CLEANUP_TIME > CLEANUP_INTERVAL or len(REQUEST_HISTORY) > MAX_HISTORY_CAP:
         stale_keys = [
             ip for ip, timestamps in REQUEST_HISTORY.items()
             if not timestamps or (now - timestamps[-1] >= RATE_LIMIT_WINDOW)
@@ -67,6 +74,11 @@ def cleanup_stale_history(now: float):
         for ip in stale_keys:
             REQUEST_HISTORY.pop(ip, None)
         LAST_CLEANUP_TIME = now
+        # If still over capacity, evict oldest keys FIFO
+        if len(REQUEST_HISTORY) > MAX_HISTORY_CAP:
+            excess = len(REQUEST_HISTORY) - MAX_HISTORY_CAP
+            for key in list(REQUEST_HISTORY.keys())[:excess]:
+                REQUEST_HISTORY.pop(key, None)
 
 def enforce_rate_limit(req: Request):
     client_ip = get_real_client_ip(req)
@@ -217,13 +229,14 @@ async def internal_generate_roadmap(idea: str, region: str, biz_type: str):
 @app.post("/api/validate")
 async def validate_idea(request: ValidationRequest, raw_req: Request):
     enforce_rate_limit(raw_req)
-    print(f"Validating: {request.idea[:20]}...")
+    resolved_idea = decrypt_sensitive_field(request.idea)
+    print(f"Validating: {resolved_idea[:20]}...")
     try:
         response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": VALIDATION_PROMPT},
-                {"role": "user", "content": f"<user_idea>{request.idea}</user_idea>"}
+                {"role": "user", "content": f"<user_idea>{resolved_idea}</user_idea>"}
             ],
             response_format={"type": "json_object"}
         )
@@ -235,8 +248,9 @@ async def validate_idea(request: ValidationRequest, raw_req: Request):
 @app.post("/api/generate_roadmap")
 async def generate_roadmap(request: RoadmapRequest, raw_req: Request):
     enforce_rate_limit(raw_req)
+    resolved_idea = decrypt_sensitive_field(request.validated_idea)
     print(f"Generating Roadmap for {request.region}...")
-    data = await internal_generate_roadmap(request.validated_idea, request.region, request.business_type)
+    data = await internal_generate_roadmap(resolved_idea, request.region, request.business_type)
     if not data:
         raise HTTPException(status_code=500, detail="Failed to generate localized roadmap.")
     return data
@@ -244,20 +258,21 @@ async def generate_roadmap(request: RoadmapRequest, raw_req: Request):
 @app.post("/api/generate_report")
 async def generate_report(request: ReportRequest, raw_req: Request):
     enforce_rate_limit(raw_req)
+    resolved_idea = decrypt_sensitive_field(request.validated_idea)
     print(f"Generating SMART Report for {request.region}...")
 
     # 1. ENSURE WE HAVE ROADMAP DATA
     current_roadmap = request.roadmap_data
     if not current_roadmap:
         print("Roadmap missing. Generating internally...")
-        current_roadmap = await internal_generate_roadmap(request.validated_idea, request.region, request.business_type)
+        current_roadmap = await internal_generate_roadmap(resolved_idea, request.region, request.business_type)
 
     # 2. INJECT INTO PROMPT
     roadmap_str = json.dumps(current_roadmap) if current_roadmap else "Standard Setup"
 
     user_context = f"""
     CONTEXT:
-    - Idea: "<user_idea>{request.validated_idea}</user_idea>"
+    - Idea: "<user_idea>{resolved_idea}</user_idea>"
     - Region: "{request.region}"
     - **Roadmap Strategy to Follow**: {roadmap_str}
     """
@@ -277,6 +292,15 @@ async def generate_report(request: ReportRequest, raw_req: Request):
     except Exception as e:
         print(f"Report Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate diligence report.")
+
+@app.get("/api/health/cert-pins")
+def cert_pins_health():
+    return {
+        "status": "active",
+        "enforce_pinning": os.getenv("ENFORCE_CERT_PINNING", "true").lower() != "false",
+        "pinned_hosts": ["api.openai.com"],
+        "field_encryption": "AES-256-GCM",
+    }
 
 @app.get("/")
 def home():
