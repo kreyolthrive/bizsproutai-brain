@@ -33,9 +33,11 @@ jobs:
       - name: Dependency vulnerability audit
         run: pip-audit -r requirements.txt
       - name: Syntax check
-        run: python -m py_compile main.py security/*.py
-      - name: Smoke test FastAPI app import
-        run: python -c "from main import app; print('App initialized successfully:', app.title)"
+        run: python -m py_compile main.py security/*.py security_smoke_test.py
+      - name: Smoke test FastAPI app import and security gates
+        run: |
+          python -c "from main import app; print('App initialized successfully:', app.title)"
+          python security_smoke_test.py
         env:
           OPENAI_API_KEY: "mock-key-for-ci"
           BRAIN_API_TOKEN: "mock-service-token-for-ci"
