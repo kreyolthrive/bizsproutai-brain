@@ -2,27 +2,41 @@ name: "Python Backend CI"
 
 on:
   push:
-    branches: [main, staging]
+    branches:
+      - main
+      - staging
+      - "release/**"
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - staging
+      - "release/**"
 
 permissions:
   contents: read
 
 jobs:
   python-quality:
-    name: "FastAPI Quality & Syntax Check"
+    name: "FastAPI Quality, Security & Syntax"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+          cache: pip
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pip-audit
+      - name: Dependency vulnerability audit
+        run: pip-audit -r requirements.txt
       - name: Syntax check
-        run: python -m py_compile main.py
+        run: python -m py_compile main.py security/*.py
       - name: Smoke test FastAPI app import
         run: python -c "from main import app; print('App initialized successfully:', app.title)"
         env:
           OPENAI_API_KEY: "mock-key-for-ci"
+          BRAIN_API_TOKEN: "mock-service-token-for-ci"
+          PAYLOAD_ENCRYPTION_KEY: "mock-payload-encryption-key-for-ci-minimum-32-bytes"
