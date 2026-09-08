@@ -10,10 +10,13 @@ import time
 
 from security.cert_pinning import create_secure_async_client
 from security.field_encryption import decrypt_sensitive_field
+from security.http_boundary import install_error_boundaries
+from security.request_verification import verify_mutation_request
 
 load_dotenv()
 
-app = FastAPI(title="BizSproutAI Brain API")
+app = FastAPI(title="BizSproutAI Brain API", version="1.0.0")
+install_error_boundaries(app)
 
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45.0"))
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -30,19 +33,31 @@ allowed_origins_env = os.getenv(
     "ALLOWED_ORIGINS",
     "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,https://bizsproutai.com,https://www.bizsproutai.com",
 )
-allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()]
+allowed_origins = [origin.strip().rstrip("/") for origin in allowed_origins_env.split(",") if origin.strip()]
+if not allowed_origins or any(origin == "*" for origin in allowed_origins):
+    raise RuntimeError("ALLOWED_ORIGINS must contain explicit origins and may not contain '*'.")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=True,
+    # Brain uses bearer auth + signed request verification; it never needs browser cookies.
+    allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-API-Version",
+        "X-Request-Id",
+        "X-Agent-Id",
+        "X-Agent-Session-Id",
+        "X-BizSprout-Timestamp",
+        "X-BizSprout-Nonce",
+        "X-BizSprout-Request-Token",
+    ],
 )
 
 # In-process limiter remains a secondary defense only. Protected API routes also
-# require a server-to-server bearer token, so this limiter is not the primary
-# authorization or cost-control boundary.
+# require server-to-server bearer auth and signed short-lived request verification.
 REQUEST_HISTORY: dict[str, list[float]] = {}
 RATE_LIMIT_WINDOW = 60
 MAX_REQUESTS_PER_WINDOW = 10
@@ -53,23 +68,25 @@ MAX_HISTORY_CAP = 10000
 
 def require_service_auth(req: Request) -> None:
     if not BRAIN_API_TOKEN:
-        raise HTTPException(
-            status_code=503,
-            detail="Brain API authentication is not configured.",
-        )
+        raise HTTPException(status_code=503, detail="brain_service_auth_not_configured")
 
     authorization = req.headers.get("authorization", "")
     scheme, _, presented = authorization.partition(" ")
     if scheme.lower() != "bearer" or not presented:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="missing_bearer_token")
 
     if not secrets.compare_digest(presented, BRAIN_API_TOKEN):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="invalid_bearer_token")
+
+
+def authorize_mutation(req: Request) -> tuple[str, str]:
+    require_service_auth(req)
+    return verify_mutation_request(req)
 
 
 def get_real_client_ip(req: Request) -> str:
-    # Proxy-provided address headers are only trusted when the deployment
-    # explicitly confirms that its ingress sanitizes them.
+    # Proxy-provided address headers are trusted only when ingress is explicitly
+    # configured to sanitize them. Default is the socket peer address.
     if TRUST_PROXY_HEADERS:
         cf_ip = req.headers.get("cf-connecting-ip")
         if cf_ip and cf_ip.strip():
@@ -116,10 +133,7 @@ def enforce_rate_limit(req: Request) -> None:
 
     if len(valid_timestamps) >= MAX_REQUESTS_PER_WINDOW:
         REQUEST_HISTORY[client_ip] = valid_timestamps
-        raise HTTPException(
-            status_code=429,
-            detail="Rate limit exceeded. Please wait before trying again.",
-        )
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
 
     valid_timestamps.append(now)
     REQUEST_HISTORY[client_ip] = valid_timestamps
@@ -129,7 +143,13 @@ def resolve_sensitive_input(value: str) -> str:
     try:
         return decrypt_sensitive_field(value)
     except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid encrypted payload") from exc
+        raise HTTPException(status_code=400, detail="invalid_encrypted_payload") from exc
+
+
+def filtered(data: object, allowed_fields: set[str]) -> dict:
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="upstream_output_not_object")
+    return {key: data[key] for key in allowed_fields if key in data}
 
 
 class ValidationRequest(BaseModel):
@@ -257,9 +277,10 @@ async def internal_generate_roadmap(idea: str, region: str, biz_type: str):
         return None
 
 
-@app.post("/api/validate")
+@app.post("/api/v1/validate")
+@app.post("/api/validate", deprecated=True, include_in_schema=False)
 async def validate_idea(request: ValidationRequest, raw_req: Request):
-    require_service_auth(raw_req)
+    authorize_mutation(raw_req)
     enforce_rate_limit(raw_req)
     resolved_idea = resolve_sensitive_input(request.idea)
 
@@ -272,17 +293,21 @@ async def validate_idea(request: ValidationRequest, raw_req: Request):
             ],
             response_format={"type": "json_object"},
         )
-        return json.loads(response.choices[0].message.content)
+        data = json.loads(response.choices[0].message.content)
+        return filtered(
+            data,
+            {"score", "status", "region", "business_type", "feedback", "risk_assessment", "fixes"},
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to validate business idea. Please try again.",
-        ) from exc
+        raise HTTPException(status_code=502, detail="validation_provider_failure") from exc
 
 
-@app.post("/api/generate_roadmap")
+@app.post("/api/v1/generate_roadmap")
+@app.post("/api/generate_roadmap", deprecated=True, include_in_schema=False)
 async def generate_roadmap(request: RoadmapRequest, raw_req: Request):
-    require_service_auth(raw_req)
+    authorize_mutation(raw_req)
     enforce_rate_limit(raw_req)
     resolved_idea = resolve_sensitive_input(request.validated_idea)
 
@@ -292,13 +317,17 @@ async def generate_roadmap(request: RoadmapRequest, raw_req: Request):
         request.business_type,
     )
     if not data:
-        raise HTTPException(status_code=502, detail="Failed to generate localized roadmap.")
-    return data
+        raise HTTPException(status_code=502, detail="roadmap_provider_failure")
+    return filtered(
+        data,
+        {"phase_1_legal", "phase_2_infrastructure", "phase_3_launch", "warnings"},
+    )
 
 
-@app.post("/api/generate_report")
+@app.post("/api/v1/generate_report")
+@app.post("/api/generate_report", deprecated=True, include_in_schema=False)
 async def generate_report(request: ReportRequest, raw_req: Request):
-    require_service_auth(raw_req)
+    authorize_mutation(raw_req)
     enforce_rate_limit(raw_req)
     resolved_idea = resolve_sensitive_input(request.validated_idea)
 
@@ -312,7 +341,7 @@ async def generate_report(request: ReportRequest, raw_req: Request):
 
     roadmap_str = json.dumps(current_roadmap) if current_roadmap else "Standard Setup"
     if len(roadmap_str.encode("utf-8")) > 50_000:
-        raise HTTPException(status_code=413, detail="Roadmap payload is too large")
+        raise HTTPException(status_code=413, detail="roadmap_payload_too_large")
 
     user_context = f"""
     CONTEXT:
@@ -331,33 +360,38 @@ async def generate_report(request: ReportRequest, raw_req: Request):
             temperature=0.3,
             response_format={"type": "json_object"},
         )
-        return json.loads(response.choices[0].message.content)
+        data = json.loads(response.choices[0].message.content)
+        return filtered(
+            data,
+            {"market_analysis", "distribution_score", "financial_outlook", "action_plan"},
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to generate diligence report.",
-        ) from exc
+        raise HTTPException(status_code=502, detail="report_provider_failure") from exc
 
 
-@app.get("/api/health/security")
+@app.get("/api/v1/health/security")
+@app.get("/api/health/security", deprecated=True, include_in_schema=False)
 def security_health():
     return {
         "status": "active",
+        "api_version": "1",
         "transport_security": "verified_https_ca_and_hostname",
         "certificate_pinning": False,
         "service_auth_configured": bool(BRAIN_API_TOKEN),
+        "request_signing_configured": len(os.getenv("BRAIN_REQUEST_SIGNING_KEY", "")) >= 32,
         "field_encryption": "AES-256-GCM",
         "field_encryption_key_configured": bool(os.getenv("PAYLOAD_ENCRYPTION_KEY")),
+        "browser_cookie_auth": False,
     }
 
 
-# Backwards-compatible health path. It is intentionally truthful that pinning is
-# not enabled rather than reporting a security control that is not implemented.
-@app.get("/api/health/cert-pins")
+@app.get("/api/health/cert-pins", deprecated=True, include_in_schema=False)
 def cert_pins_health():
     return security_health()
 
 
 @app.get("/")
 def home():
-    return {"status": "BizSproutAI Brain is Online"}
+    return {"status": "BizSproutAI Brain is Online", "apiVersion": "1"}
