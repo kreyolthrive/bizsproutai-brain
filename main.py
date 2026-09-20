@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 load_dotenv()
 
 logger = logging.getLogger("bizsproutai.brain")
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # --- INIT ---
@@ -347,10 +347,18 @@ def get_real_client_ip(req: Request) -> str:
 
     forwarded = req.headers.get("x-forwarded-for")
     if forwarded:
-        first_hop = forwarded.split(",", 1)[0].strip()
-        forwarded_ip = _client_ip_from_header(first_hop)
-        if forwarded_ip:
-            return forwarded_ip
+        chain = [
+            parsed
+            for parsed in (
+                _client_ip_from_header(part.strip()) for part in forwarded.split(",")
+            )
+            if parsed
+        ]
+        for candidate in reversed(chain):
+            if not _proxy_is_trusted(candidate):
+                return candidate
+        if chain:
+            return chain[0]
 
     return direct_ip
 
