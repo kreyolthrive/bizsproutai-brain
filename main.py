@@ -483,8 +483,8 @@ async def internal_generate_roadmap(
 @app.post("/api/validate")
 async def validate_idea(request: ValidationRequest, raw_req: Request) -> dict[str, Any]:
     request_id = raw_req.state.request_id
-    enforce_endpoint_auth(raw_req)
     enforce_rate_limit(raw_req)
+    enforce_endpoint_auth(raw_req)
     try:
         response = await client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -512,8 +512,8 @@ async def validate_idea(request: ValidationRequest, raw_req: Request) -> dict[st
 @app.post("/api/generate_roadmap")
 async def generate_roadmap(request: RoadmapRequest, raw_req: Request) -> dict[str, Any]:
     request_id = raw_req.state.request_id
-    enforce_endpoint_auth(raw_req)
     enforce_rate_limit(raw_req)
+    enforce_endpoint_auth(raw_req)
     data = await internal_generate_roadmap(
         request.validated_idea, request.region, request.business_type, request_id
     )
@@ -525,8 +525,8 @@ async def generate_roadmap(request: RoadmapRequest, raw_req: Request) -> dict[st
 @app.post("/api/generate_report")
 async def generate_report(request: ReportRequest, raw_req: Request) -> dict[str, Any]:
     request_id = raw_req.state.request_id
-    enforce_endpoint_auth(raw_req)
     enforce_rate_limit(raw_req)
+    enforce_endpoint_auth(raw_req)
 
     current_roadmap = request.roadmap_data
     if not current_roadmap:
