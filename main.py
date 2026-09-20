@@ -577,8 +577,4 @@ async def generate_report(request: ReportRequest, raw_req: Request) -> dict[str,
 
 @app.get("/")
 def home() -> dict[str, str]:
-    return {
-        "status": "BizSproutAI Brain is Online",
-        "rate_limiter": RATE_LIMIT_BACKEND,
-        "rate_limiter_note": "In-memory limiter is single-instance only; use shared gateway limiting for distributed deployments.",
-    }
+    return {"status": "BizSproutAI Brain is Online"}
