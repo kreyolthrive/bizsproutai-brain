@@ -70,6 +70,8 @@ def test_validate_provider_invalid_json_returns_502(client, monkeypatch):
         headers={"x-api-key": "test-endpoint-key"},
     )
     assert response.status_code == 502
+    assert response.json()["detail"] == "Provider returned invalid response format."
+    assert response.headers["x-request-id"]
 
 
 def test_validate_provider_failure_returns_502(client, monkeypatch):
@@ -84,6 +86,8 @@ def test_validate_provider_failure_returns_502(client, monkeypatch):
         headers={"x-api-key": "test-endpoint-key"},
     )
     assert response.status_code == 502
+    assert response.json()["detail"] == "Failed to validate business idea. Please try again."
+    assert response.headers["x-request-id"]
 
 
 def test_generate_roadmap_success(client, monkeypatch):
@@ -212,3 +216,7 @@ def test_auth_fail_closed_when_expected(client, monkeypatch):
         headers={"x-api-key": "test-endpoint-key"},
     )
     assert response.status_code == 503
+    assert (
+        response.json()["detail"]
+        == "Endpoint protection is enabled but ENDPOINT_API_KEY is not configured."
+    )

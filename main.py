@@ -11,6 +11,7 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -415,7 +416,7 @@ async def request_id_middleware(
             path=request.url.path,
             method=request.method,
         )
-        raise
+        response = JSONResponse(status_code=500, content={"detail": "Internal server error."})
 
     response.headers["x-request-id"] = request_id
     _log_event(
