@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   python-quality:
-    name: "FastAPI Quality & Syntax Check"
+    name: "FastAPI Quality, Type & Test Checks"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -19,10 +19,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Syntax check
-        run: python -m py_compile main.py
-      - name: Smoke test FastAPI app import
-        run: python -c "from main import app; print('App initialized successfully:', app.title)"
+        run: pip install -r requirements-dev.txt
+      - name: Ruff check
+        run: ruff check .
+      - name: Ruff format check
+        run: ruff format --check .
+      - name: Mypy
+        run: mypy main.py
+      - name: Unit tests
+        run: pytest -q
         env:
           OPENAI_API_KEY: "mock-key-for-ci"
+          ENDPOINT_API_KEY: "ci-endpoint-key"
