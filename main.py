@@ -3,6 +3,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -20,6 +21,7 @@ load_dotenv()
 
 logger = logging.getLogger("bizsproutai.brain")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # --- INIT ---
 app = FastAPI(title="BizSproutAI Brain API")
@@ -402,7 +404,12 @@ def parse_provider_json(
 async def request_id_middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    incoming_request_id = request.headers.get("x-request-id")
+    request_id = (
+        incoming_request_id
+        if incoming_request_id and REQUEST_ID_PATTERN.fullmatch(incoming_request_id)
+        else str(uuid.uuid4())
+    )
     request.state.request_id = request_id
     start_time = time.time()
 

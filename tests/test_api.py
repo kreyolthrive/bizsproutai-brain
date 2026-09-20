@@ -111,6 +111,27 @@ def test_generate_roadmap_success(client, monkeypatch):
     assert "phase_1_legal" in response.json()
 
 
+def test_generate_roadmap_invalid_schema_returns_502(client, monkeypatch):
+    _mock_openai_json(
+        monkeypatch,
+        '{"phase_1_legal":{"step_name":"Register","description":"Register entity"},'
+        '"phase_2_infrastructure":{"step_name":"Setup","description":"Set up tools"},'
+        '"phase_3_launch":{"step_name":"Launch","description":"Go live"},"warnings":["None"]}',
+    )
+
+    response = client.post(
+        "/api/generate_roadmap",
+        json={
+            "validated_idea": "Validated business idea",
+            "region": "US",
+            "business_type": "SaaS",
+        },
+        headers={"x-api-key": "test-endpoint-key"},
+    )
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Provider returned invalid response schema."
+
+
 def test_generate_report_success(client, monkeypatch):
     _mock_openai_json(
         monkeypatch,
@@ -139,6 +160,31 @@ def test_generate_report_success(client, monkeypatch):
                 "phase_3_launch": {"step_name": "Launch", "description": "Go live"},
                 "warnings": ["None"],
             },
+        },
+        headers={"x-api-key": "test-endpoint-key"},
+    )
+    assert response.status_code == 200
+    assert len(response.json()["action_plan"]) == 3
+
+
+def test_generate_report_without_roadmap_generates_internally(client, monkeypatch):
+    _mock_openai_json(
+        monkeypatch,
+        '{"phase_1_legal":{"step_name":"Register","description":"Register entity","estimated_cost":"$100"},'
+        '"phase_2_infrastructure":{"step_name":"Setup","description":"Set up tools"},'
+        '"phase_3_launch":{"step_name":"Launch","description":"Go live"},"warnings":["None"]}',
+        '{"market_analysis":{"saturation_level":"Medium","market_insight":"Room to grow"},'
+        '"distribution_score":{"score":65,"analysis":"Good channels"},'
+        '"financial_outlook":{"rating":"Positive","reasoning":"Lean model"},'
+        '"action_plan":["Do A","Do B","Do C"]}',
+    )
+
+    response = client.post(
+        "/api/generate_report",
+        json={
+            "validated_idea": "Validated business idea",
+            "region": "US",
+            "business_type": "SaaS",
         },
         headers={"x-api-key": "test-endpoint-key"},
     )
@@ -176,6 +222,22 @@ def test_generate_report_invalid_schema_returns_502(client, monkeypatch):
         headers={"x-api-key": "test-endpoint-key"},
     )
     assert response.status_code == 502
+
+
+def test_generate_report_missing_roadmap_failure_returns_502(client, monkeypatch):
+    _mock_openai_json(monkeypatch, "not-json")
+
+    response = client.post(
+        "/api/generate_report",
+        json={
+            "validated_idea": "Validated business idea",
+            "region": "US",
+            "business_type": "SaaS",
+        },
+        headers={"x-api-key": "test-endpoint-key"},
+    )
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Provider returned invalid response format."
 
 
 def test_rate_limit_enforced(client, monkeypatch):
