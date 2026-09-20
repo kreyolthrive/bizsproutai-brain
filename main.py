@@ -423,6 +423,8 @@ async def request_id_middleware(
 
     try:
         response = await call_next(request)
+    except HTTPException:
+        raise
     except Exception:
         _log_event(
             logging.ERROR,

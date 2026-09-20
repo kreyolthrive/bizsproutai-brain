@@ -266,6 +266,10 @@ def test_rate_limit_enforced(client, monkeypatch):
     )
     assert first.status_code == 200
     assert second.status_code == 429
+    assert (
+        second.json()["detail"]
+        == "Rate limit exceeded. Please wait a moment before trying again."
+    )
 
 
 def test_auth_fail_closed_when_expected(client, monkeypatch):
@@ -282,3 +286,21 @@ def test_auth_fail_closed_when_expected(client, monkeypatch):
         response.json()["detail"]
         == "Endpoint protection is enabled but ENDPOINT_API_KEY is not configured."
     )
+
+
+def test_auth_missing_key_returns_401(client, monkeypatch):
+    _mock_openai_json(
+        monkeypatch,
+        '{"score":80,"status":"GO","region":"US","business_type":"SaaS","feedback":"Promising",'
+        '"risk_assessment":{"demand":{"score":70,"explanation":"ok"},"economics":{"score":75,"explanation":"ok"},'
+        '"distribution":{"score":85,"explanation":"ok"},"moat":{"score":65,"explanation":"ok"}},'
+        '"fixes":[{"problem":"None","fix":"Proceed"}]}',
+    )
+
+    response = client.post(
+        "/api/validate",
+        json={"idea": "A valid business idea text"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Unauthorized"
+    assert response.headers["x-request-id"]
