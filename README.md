@@ -32,6 +32,9 @@ Secrets are read from the environment only; nothing is committed. Copy a local `
 | Variable | Required | Default | Notes |
 |---|---|---|---|
 | `OPENAI_API_KEY` | **yes** | — | Server-side only. Never expose it to a browser. |
+| `ENDPOINT_API_KEY` | **yes** | — | Server-to-server caller secret, provisioned separately on Brain and the trusted caller. Never use a `VITE_*` variable. |
+| `REQUIRE_ENDPOINT_AUTH` | production: **true** | `true` | Requires the endpoint key on paid API routes; keep enabled. |
+| `TRUST_PROXY_HEADERS` | no | `false` | Enable only behind a trusted proxy that replaces forwarding headers. |
 | `OPENAI_MODEL` | no | `gpt-4o-mini` | Override the chat model. |
 | `OPENAI_TIMEOUT_SECONDS` | no | `45.0` | Per-request timeout to OpenAI. |
 | `ALLOWED_ORIGINS` | no (prod: **yes**) | localhost + `https://bizsproutai.com`, `https://www.bizsproutai.com` | Comma-separated CORS allowlist. |
@@ -42,8 +45,9 @@ Requires **Python 3.11**.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock.txt
 export OPENAI_API_KEY=sk-...        # or put it in a git-ignored .env
+# Set ENDPOINT_API_KEY to a unique, high-entropy secret in that same server-only environment.
 uvicorn main:app --reload --port 8000
 ```
 
@@ -53,6 +57,7 @@ Then:
 curl -s localhost:8000/                      # health check
 curl -s -X POST localhost:8000/api/validate \
   -H 'content-type: application/json' \
+  -H "x-api-key: $ENDPOINT_API_KEY" \
   -d '{"idea":"A meal-prep service for busy nurses in Miami"}'
 ```
 
@@ -60,7 +65,7 @@ Interactive docs are available at `http://localhost:8000/docs` (FastAPI/Swagger 
 
 ## Deployment
 
-Deployed as a Render web service (`render.yaml`): Python runtime, `pip install -r requirements.txt`, started with `uvicorn main:app --host 0.0.0.0 --port $PORT`. `OPENAI_API_KEY` is set in the environment (`sync: false`), `PYTHON_VERSION` is pinned to 3.11.
+Deployed as a Render web service (`render.yaml`): Python runtime, `pip install -r requirements.lock.txt`, started with `uvicorn main:app --host 0.0.0.0 --port $PORT`. `OPENAI_API_KEY` and `ENDPOINT_API_KEY` are set in the environment (`sync: false`), and `REQUIRE_ENDPOINT_AUTH=true`, `PYTHON_VERSION` is pinned to 3.11.
 
 > The service name in `render.yaml` is historical; this repository is the Brain service. Confirm the actual deployed service and environment before promotion.
 
@@ -81,3 +86,14 @@ Deployed as a Render web service (`render.yaml`): Python runtime, `pip install -
 - Keep `OPENAI_API_KEY` server-side; never place it in client code or a `VITE_*` variable.
 - The in-memory rate limiter does not establish multi-instance abuse protection (see above).
 - Set a tight `ALLOWED_ORIGINS` in production.
+
+## Caller integration release check
+
+No active call from the inspected frontend or Supabase function source to this
+service was found in the October 2026 review. Do not deploy the authentication
+change assuming an existing caller already sends the key. Identify the actual
+service URL and trusted server caller first; provision the same endpoint secret
+on both sides, then verify refusal with no/incorrect key and success with a
+mocked provider in staging. Never attach the endpoint secret to a browser call.
+CORS is not caller authentication. These source checks do not verify Render's
+live environment or identify callers outside these repositories.
