@@ -43,6 +43,56 @@ def test_home(client):
     assert body["status"] == "BizSproutAI Brain is Online"
 
 
+def lead_payload():
+    return {
+        "brief": {
+            "offer": "Cleaning",
+            "offer_type": "service",
+            "offer_terms": ["cleaner"],
+            "buyer_phrases": ["looking for"],
+        },
+        "candidates": [],
+    }
+
+
+def test_lead_review_disabled_by_default(client, monkeypatch):
+    monkeypatch.delenv("LEAD_DISCOVERY_ENABLED", raising=False)
+    response = client.post(
+        "/api/leads/review", json=lead_payload(), headers={"x-api-key": "test-endpoint-key"}
+    )
+    assert response.status_code == 503
+
+
+def test_lead_review_requires_server_auth(client, monkeypatch):
+    monkeypatch.setenv("LEAD_DISCOVERY_ENABLED", "true")
+    assert client.post("/api/leads/review", json=lead_payload()).status_code == 401
+    monkeypatch.setattr(main, "ENDPOINT_AUTH_REQUIRED", False)
+    assert client.post("/api/leads/review", json=lead_payload()).status_code == 503
+
+
+def test_lead_review_no_provider_calls(client, monkeypatch):
+    monkeypatch.setenv("LEAD_DISCOVERY_ENABLED", "true")
+
+    async def forbidden(**kwargs):
+        raise AssertionError("Lead review must not call OpenAI")
+
+    monkeypatch.setattr(main.client.chat.completions, "create", forbidden)
+    response = client.post(
+        "/api/leads/review", json=lead_payload(), headers={"x-api-key": "test-endpoint-key"}
+    )
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+    assert response.json()["mode"] == "supplied_candidates_only"
+
+
+def test_lead_review_rate_limit(client, monkeypatch):
+    monkeypatch.setenv("LEAD_DISCOVERY_ENABLED", "true")
+    monkeypatch.setattr(main, "RATE_LIMITER", main.InMemoryRateLimiter(60, 1))
+    options = {"json": lead_payload(), "headers": {"x-api-key": "test-endpoint-key"}}
+    assert client.post("/api/leads/review", **options).status_code == 200
+    assert client.post("/api/leads/review", **options).status_code == 429
+
+
 def test_validate_success(client, monkeypatch):
     _mock_openai_json(
         monkeypatch,

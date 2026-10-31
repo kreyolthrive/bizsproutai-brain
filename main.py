@@ -16,6 +16,8 @@ from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from lead_discovery import LeadReviewRequest, LeadReviewResponse, review_leads
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -478,6 +480,20 @@ async def internal_generate_roadmap(
 
 
 # --- ROUTES ---
+
+
+@app.post("/api/leads/review", response_model=LeadReviewResponse)
+async def review_lead_candidates(
+    request: LeadReviewRequest, raw_req: Request
+) -> LeadReviewResponse:
+    # Server-to-server only. Never expose ENDPOINT_API_KEY to the browser.
+    if not ENDPOINT_AUTH_REQUIRED:
+        raise HTTPException(status_code=503, detail="Lead review requires endpoint authentication.")
+    enforce_endpoint_auth(raw_req)
+    enforce_rate_limit(raw_req)
+    if os.getenv("LEAD_DISCOVERY_ENABLED", "false").lower() != "true":
+        raise HTTPException(status_code=503, detail="Lead discovery is not enabled.")
+    return review_leads(request)
 
 
 @app.post("/api/validate")
