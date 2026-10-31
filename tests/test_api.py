@@ -93,6 +93,80 @@ def test_lead_review_rate_limit(client, monkeypatch):
     assert client.post("/api/leads/review", **options).status_code == 429
 
 
+def test_search_auth_and_default_off(client, monkeypatch):
+    monkeypatch.delenv("LEAD_SEARCH_ENABLED", raising=False)
+    payload = {"brief": lead_payload()["brief"]}
+    assert client.post("/api/leads/discover", json=payload).status_code == 401
+    response = client.post(
+        "/api/leads/discover", json=payload, headers={"x-api-key": "test-endpoint-key"}
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Lead search is not enabled."
+
+
+def test_search_missing_credentials_fails_closed(client, monkeypatch):
+    monkeypatch.setenv("LEAD_DISCOVERY_ENABLED", "true")
+    monkeypatch.setenv("LEAD_SEARCH_ENABLED", "true")
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    response = client.post(
+        "/api/leads/discover",
+        json={"brief": lead_payload()["brief"]},
+        headers={"x-api-key": "test-endpoint-key"},
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Lead search is not configured."
+
+
+def test_search_cannot_run_with_general_auth_disabled(client, monkeypatch):
+    monkeypatch.setattr(main, "ENDPOINT_AUTH_REQUIRED", False)
+    response = client.post("/api/leads/discover", json={"brief": lead_payload()["brief"]})
+    assert response.status_code == 503
+
+
+def test_search_route_uses_bounded_connector(client, monkeypatch):
+    from lead_search import LeadSearchResponse
+
+    monkeypatch.setenv("LEAD_DISCOVERY_ENABLED", "true")
+    monkeypatch.setenv("LEAD_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "server-only-search-key")
+    calls = []
+
+    async def fake_discover(request, key, search_client):
+        from datetime import UTC, datetime
+
+        calls.append((request.max_queries, key))
+        now = datetime.now(UTC)
+        return LeadSearchResponse(
+            run_id="test-run",
+            status="completed",
+            started_at=now,
+            finished_at=now,
+            queries=[],
+            results=[],
+            evidence=[],
+            duplicates_removed=0,
+        )
+
+    monkeypatch.setattr(main, "discover_leads", fake_discover)
+    response = client.post(
+        "/api/leads/discover",
+        json={"brief": lead_payload()["brief"]},
+        headers={"x-api-key": "test-endpoint-key"},
+    )
+    assert response.status_code == 200
+    assert calls == [(2, "server-only-search-key")]
+    assert "server-only-search-key" not in response.text
+
+
+def test_search_request_budget_bounds(client):
+    response = client.post(
+        "/api/leads/discover",
+        json={"brief": lead_payload()["brief"], "max_queries": 50},
+        headers={"x-api-key": "test-endpoint-key"},
+    )
+    assert response.status_code == 422
+
+
 def test_validate_success(client, monkeypatch):
     _mock_openai_json(
         monkeypatch,

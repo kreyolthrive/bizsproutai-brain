@@ -40,11 +40,11 @@ References reviewed 31 October 2026:
 
 Provider selection and credentials are not activated in this patch. Source-specific access, retention and permitted uses must be recorded for each connector before enabling it.
 
-## Implemented first slice
+## Implemented qualification contract
 
 `lead_discovery.py` implements the typed brief, bounded query planning, supplied-candidate triage, supporting phrase excerpts, freshness checks, explicit exclusions, URL/text deduplication and a versioned response. Service and product briefs are supported. English default exclusions are conservative heuristics; other languages require configured exclusions and evaluation. Excerpts are normalized supplied text, not independently fetched citations. Unknown dates and unconfirmed required locations cannot receive high review priority. Even high-priority results always have `status=needs_review`.
 
-`POST /api/leads/review` is server-to-server, requires the existing endpoint secret and refuses operation if endpoint authentication is disabled. The endpoint is off unless `LEAD_DISCOVERY_ENABLED=true`. Existing rate limiting applies; its in-memory deployment limitations remain. At most 50 supplied candidates, 6,000 characters per text and bounded brief terms are accepted. URLs are validated references only; no URL is fetched. No new dependency, model call, external search, persistence, migration, scheduler, email or customer data access is introduced.
+`POST /api/leads/review` is server-to-server, requires the existing endpoint secret and refuses operation if endpoint authentication is disabled. The endpoint is off unless `LEAD_DISCOVERY_ENABLED=true`. Existing rate limiting applies; its in-memory deployment limitations remain. At most 50 supplied candidates, 6,000 characters per text and bounded brief terms are accepted. URLs are validated references only; no URL is fetched. This review route performs no model call, external search, persistence, migration, scheduler, email or customer data access.
 
 Example body:
 
@@ -65,15 +65,43 @@ Example body:
 
 Empty candidates return search queries and no leads. The response explicitly says no sources were searched. Never present this as autonomous discovery.
 
-## Next implementation gates
+## Implemented discovery connector and app integration
 
-- Add a server caller in Supabase that verifies the requesting user owns the canonical business and consumes a per-business/user discovery budget before Brain/provider work. The shared Brain key is not tenant authorization. Never send it to the browser.
+`POST /api/leads/discover` calls the fixed Brave Web Search origin through `lead_search.py`, then runs the evidence review contract. It is additionally disabled unless `LEAD_SEARCH_ENABLED=true`; `BRAVE_SEARCH_API_KEY` stays on Brain. HTTPX is now explicitly pinned at the version already present in the runtime lock. No new resolved package or lockfile hash is introduced.
+
+The connector allows 1–3 queries per direct trusted-server request (default 2), up to 10 results/query, no pagination, no retries, 10 seconds/request and 25 seconds/run. Responses are capped at 512 KiB, redirects are refused, errors use sanitized codes, authentication/rate failures stop subsequent calls, invalid rows are counted and partial results survive failed queries. All planned-but-budgeted-out queries appear as not searched. Completed means completion within the selected query budget, not exhaustive coverage.
+
+Result snippets are provider-supplied evidence. Titles never establish intent. Search-result age and last-modified hints never establish publication freshness; all search candidates have an unknown publication date and cannot receive high review priority. Deduplication retains the receipt corresponding to the strongest ranked candidate. No result URLs are fetched.
+
+Companion changes in backend/frontend feature branches provide:
+
+- `lead-discovery` Supabase function: authenticate a user, verify the business idea or app ownership and any linked canonical parent, consume per-user (2/minute, 20/day), canonical-business (10/day) and global (200/day) run quotas before Brain work. Fail closed on quota/ownership errors. Force 2 queries and 10 results/query; reject browser budget or provider overrides. The shared Brain secret is never browser-visible. Global maximum is therefore 400 search requests/day through this gateway; failed attempts also consume run quotas.
+- CRM opportunities panel: explicit search submission, founder-editable brief, coverage/partial failure reporting, source snippets/links, shortlist and dismiss. Results and decisions are in memory only and reset when changing business or leaving/reloading the view. They do not create contacts, send outreach or subscribe anyone.
+- UI stays hidden unless `VITE_LEAD_DISCOVERY_ENABLED=true`; edge stays off unless its `LEAD_DISCOVERY_ENABLED=true`. Brain requires both feature flags and existing endpoint authentication. These are staged code changes; no flags, credentials or deployments are activated here.
+
+## Staging configuration and acceptance
+
+After separately reviewing/approving the feature PRs, configure only in staging:
+
+| Runtime | Configuration |
+|---|---|
+| Brain | `REQUIRE_ENDPOINT_AUTH=true`, `ENDPOINT_API_KEY`, `LEAD_DISCOVERY_ENABLED=true`, `LEAD_SEARCH_ENABLED=true`, `BRAVE_SEARCH_API_KEY` |
+| Supabase | `LEAD_DISCOVERY_ENABLED=true`, `BRAIN_API_ORIGIN` (trusted HTTPS origin only), `BRAIN_ENDPOINT_API_KEY` matching Brain's secret |
+| Frontend build | `VITE_LEAD_DISCOVERY_ENABLED=true` (public feature flag only) |
+
+The gateway sends `x-api-key`; keep Brain's `ENDPOINT_AUTH_HEADER` at that default for this integration. A custom Brain auth-header configuration must be aligned before activation. Its in-memory IP limiter remains process-local; the edge gateway's database quotas supply tenant/global budgets. Ensure no other trusted caller bypasses those budgets.
+
+Acceptance: no/incorrect Brain secret is refused; a user cannot search a foreign business; alias app/idea IDs share the canonical quota; provider errors cannot leak keys; a partial run stays partial; web snippets remain unverified; shortlist does not create contacts; changing businesses cannot show the previous run. Configure source access/retention for the selected provider before any enabled pilot. Search API access is not blanket permission to reuse content from every indexed platform.
+
+## Remaining implementation gates
+
 - Add opt-in campaign/run/candidate persistence with ownership RLS and canonical business foreign keys. A background worker must use trusted job IDs, recheck tenant scope and support cancellation, retries, leases, idempotency and spend limits. No production migration is included here.
-- Add the first search adapter with mocked contract tests, fixed provider origin, server-only credentials, timeout/retry/page limits and a source coverage ledger. Do not fetch arbitrary result URLs without separate SSRF/redirect/content controls. Only verified connector timestamps can establish freshness; caller-supplied timestamps are unverified in this slice.
-- Add an opportunities inbox with evidence, uncertainties, accept/dismiss and accepted-only CRM promotion. Do not auto-subscribe discovered people to marketing.
-- Evaluate a human-labeled dataset across service/product offers and configured languages, including seller ads, negation, quotes, old posts, fake URLs, wrong locations and adversarial instructions. Track high-priority precision, false positives and per-run cost before wider rollout.
-- Keep this feature separate from launch security promotion. The current code is a disabled foundation, not a finished discovery service and not a launch dependency.
+- Add explicit accepted-only CRM promotion and a supported reply workflow. Do not auto-subscribe discovered people to marketing.
+- Evaluate a human-labeled dataset across service/product offers and configured languages, including seller ads, negation, quotes, old posts, fake URLs, wrong locations and adversarial instructions. Track precision, false positives and per-run cost before wider rollout.
+- Keep this feature separate from launch security promotion. This is an on-demand pilot implementation, not an autonomous scheduled agent or exhaustive discovery service.
 
 ## Local verification
 
-46 tests pass, including 31 new qualification/API cases, with provider-free authentication, default-off and rate-limit checks. Ruff, formatting and mypy checks cover the new module and API. Local Python is 3.12; the existing CI target remains 3.11 and requires a hosted run. One existing Starlette/httpx deprecation warning remains. No live source, provider spend or production change was performed.
+Brain: 69 tests pass (including 18 mocked HTTP connector cases and 5 new API cases), Ruff lint/format and mypy pass. Local Python is 3.12; hosted Python 3.11 verification remains required. One existing Starlette/httpx deprecation warning remains. The gateway has 13 provider-free handler tests and passes frozen-lock Deno typechecking. Frontend includes request/response contracts and review interaction tests; see its feature PR for full-suite counts.
+
+No live source call, provider spend, customer-data query, production flag/secret change, merge, deployment or migration was performed.
