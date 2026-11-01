@@ -9,12 +9,16 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from lead_discovery import LeadReviewRequest, LeadReviewResponse, review_leads
+from lead_search import LeadSearchRequest, LeadSearchResponse, discover_leads
 
 # Load environment variables from .env file
 load_dotenv()
@@ -478,6 +482,42 @@ async def internal_generate_roadmap(
 
 
 # --- ROUTES ---
+
+
+@app.post("/api/leads/review", response_model=LeadReviewResponse)
+async def review_lead_candidates(
+    request: LeadReviewRequest, raw_req: Request
+) -> LeadReviewResponse:
+    # Server-to-server only. Never expose ENDPOINT_API_KEY to the browser.
+    if not ENDPOINT_AUTH_REQUIRED:
+        raise HTTPException(status_code=503, detail="Lead review requires endpoint authentication.")
+    enforce_endpoint_auth(raw_req)
+    enforce_rate_limit(raw_req)
+    if os.getenv("LEAD_DISCOVERY_ENABLED", "false").lower() != "true":
+        raise HTTPException(status_code=503, detail="Lead discovery is not enabled.")
+    return review_leads(request)
+
+
+@app.post("/api/leads/discover", response_model=LeadSearchResponse)
+async def search_lead_candidates(
+    request: LeadSearchRequest, raw_req: Request
+) -> LeadSearchResponse:
+    if not ENDPOINT_AUTH_REQUIRED:
+        raise HTTPException(
+            status_code=503, detail="Lead discovery requires endpoint authentication."
+        )
+    enforce_endpoint_auth(raw_req)
+    enforce_rate_limit(raw_req)
+    if (
+        os.getenv("LEAD_DISCOVERY_ENABLED", "false").lower() != "true"
+        or os.getenv("LEAD_SEARCH_ENABLED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=503, detail="Lead search is not enabled.")
+    key = os.getenv("BRAVE_SEARCH_API_KEY", "")
+    if not key.strip():
+        raise HTTPException(status_code=503, detail="Lead search is not configured.")
+    async with httpx.AsyncClient(trust_env=False) as search_client:
+        return await discover_leads(request, key, search_client)
 
 
 @app.post("/api/validate")
