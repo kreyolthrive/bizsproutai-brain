@@ -76,7 +76,7 @@ Result snippets are provider-supplied evidence. Titles never establish intent. S
 Companion changes in backend/frontend feature branches provide:
 
 - `lead-discovery` Supabase function: authenticate a user, verify the business idea or app ownership and any linked canonical parent, consume per-user (2/minute, 20/day), canonical-business (10/day) and global (200/day) run quotas before Brain work. Fail closed on quota/ownership errors. Force 2 queries and 10 results/query; reject browser budget or provider overrides. The shared Brain secret is never browser-visible. Global maximum is therefore 400 search requests/day through this gateway; failed attempts also consume run quotas.
-- CRM opportunities panel: explicit search submission, founder-editable brief, coverage/partial failure reporting, source snippets/links, shortlist and dismiss. Results and decisions are in memory only and reset when changing business or leaving/reloading the view. They do not create contacts, send outreach or subscribe anyone.
+- CRM opportunities panel: explicit search submission, founder-editable brief, coverage/partial failure reporting, source snippets/links, shortlist and dismiss. Results and decisions are persisted through the owned-business job API and can be restored after reload. They do not create contacts, send outreach or subscribe anyone.
 - UI stays hidden unless `VITE_LEAD_DISCOVERY_ENABLED=true`; edge stays off unless its `LEAD_DISCOVERY_ENABLED=true`. Brain requires both feature flags and existing endpoint authentication. These are staged code changes; no flags, credentials or deployments are activated here.
 
 ## Staging configuration and acceptance
@@ -95,13 +95,18 @@ Acceptance: no/incorrect Brain secret is refused; a user cannot search a foreign
 
 ## Remaining implementation gates
 
-- Add opt-in campaign/run/candidate persistence with ownership RLS and canonical business foreign keys. A background worker must use trusted job IDs, recheck tenant scope and support cancellation, retries, leases, idempotency and spend limits. No production migration is included here.
+- Companion backend PR #89 now adds an unapplied job/opportunity migration, owner-read policies, service-only lease RPCs, idempotent enqueue, cancellation and a default-disabled worker. Queue admission and actual execution use separate budgets; every actual attempt shares the synchronous provider quota, including recovery and work crossing midnight. Budget waits defer for 15 minutes without consuming a provider attempt. The worker has 90-second leases and at most two provider attempts; stale leases cannot commit. Review persistence is transactional and does not promote contacts. Validate concurrent workers and migration compatibility in staging before activation.
 - Add explicit accepted-only CRM promotion and a supported reply workflow. Do not auto-subscribe discovered people to marketing.
 - Evaluate a human-labeled dataset across service/product offers and configured languages, including seller ads, negation, quotes, old posts, fake URLs, wrong locations and adversarial instructions. Track precision, false positives and per-run cost before wider rollout.
-- Keep this feature separate from launch security promotion. This is an on-demand pilot implementation, not an autonomous scheduled agent or exhaustive discovery service.
+- Keep this feature separate from launch security promotion. This is a queue-backed pilot with an unactivated scheduler, not exhaustive discovery.
 
 ## Local verification
 
-Brain: 69 tests pass (including 18 mocked HTTP connector cases and 5 new API cases), Ruff lint/format and mypy pass. Local Python is 3.12; hosted Python 3.11 verification remains required. One existing Starlette/httpx deprecation warning remains. The gateway has 13 provider-free handler tests and passes frozen-lock Deno typechecking. Frontend includes request/response contracts and review interaction tests; see its feature PR for full-suite counts.
+Brain: 69 tests pass (including 18 mocked HTTP connector cases and 5 new API cases), Ruff lint/format and mypy pass. Local Python is 3.12; hosted Python 3.11 verification remains required. One existing Starlette/httpx deprecation warning remains. The gateway/job/worker handlers have 32 provider-free tests and pass frozen-lock Deno typechecking. A disposable SQL fixture passes 22 checks for ownership, persistence, leases, cancellation, exhaustion and budget waits. Frontend has 1,300 passing tests including saved-review interactions. PostgreSQL CI and authenticated staging verification remain pending.
 
 No live source call, provider spend, customer-data query, production flag/secret change, merge, deployment or migration was performed.
+
+
+### Background worker rollout note — 1 November 2026
+
+Backend PR #89's migration and worker are staged code only. No database migration, cron extension, scheduler or live worker was activated. Add `LEAD_DISCOVERY_WORKER_ENABLED=true` only on an approved staging worker with a trusted tick source. User creation/deletion and canonical parent foreign keys are covered in the new schema; source-specific timed retention/cleanup remains to be defined before collecting pilot data. Workers may repeat a provider request after an ambiguous crash, but only a current valid lease can commit a result. The UI restores the most recent ten jobs and pauses polling after 15 reads; it does not continuously poll indefinitely or start new searches on mount.
