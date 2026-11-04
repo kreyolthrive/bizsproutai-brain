@@ -253,11 +253,14 @@ async def validate_idea(request: ValidationRequest, raw_req: Request):
             status_code=500, detail="Failed to validate business idea. Please try again."
         ) from e
 
+
 @app.post("/api/generate_roadmap")
 async def generate_roadmap(request: RoadmapRequest, raw_req: Request):
     enforce_rate_limit(raw_req)
     print(f"Generating Roadmap for {request.region}...")
-    data = await internal_generate_roadmap(request.validated_idea, request.region, request.business_type)
+    data = await internal_generate_roadmap(
+        request.validated_idea, request.region, request.business_type
+    )
     if not data:
         raise HTTPException(status_code=500, detail="Failed to generate localized roadmap.")
     return data
@@ -301,6 +304,7 @@ async def generate_report(request: ReportRequest, raw_req: Request):
     except Exception as e:
         print(f"Report Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate diligence report.") from e
+
 
 @app.get("/")
 def home():
