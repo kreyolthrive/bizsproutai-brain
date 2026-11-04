@@ -77,9 +77,7 @@ def test_validate_returns_500_when_provider_fails(client, monkeypatch):
     )
 
     assert response.status_code == 500
-    assert response.json()["detail"] == (
-        "Failed to validate business idea. Please try again."
-    )
+    assert response.json()["detail"] == ("Failed to validate business idea. Please try again.")
 
 
 def test_generate_roadmap_returns_provider_json(client, monkeypatch):
