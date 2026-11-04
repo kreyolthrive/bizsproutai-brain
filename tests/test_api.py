@@ -22,9 +22,7 @@ def mock_openai_json(monkeypatch, *payloads):
     async def fake_create(**kwargs):
         payload = payloads[fake_create.calls]
         fake_create.calls += 1
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=payload))]
-        )
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=payload))])
 
     fake_create.calls = 0
     monkeypatch.setattr(main.client.chat.completions, "create", fake_create)
@@ -64,9 +62,7 @@ def test_validate_returns_500_for_invalid_provider_json(client, monkeypatch):
     )
 
     assert response.status_code == 500
-    assert response.json()["detail"] == (
-        "Failed to validate business idea. Please try again."
-    )
+    assert response.json()["detail"] == ("Failed to validate business idea. Please try again.")
 
 
 def test_validate_returns_500_when_provider_fails(client, monkeypatch):
