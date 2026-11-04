@@ -1,13 +1,15 @@
 # FILE: ~/dev/bizsproutai-backend/main.py
 
+import json
+import os
+import time
+from typing import Any
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
-from dotenv import load_dotenv
-import json
-import time
-import os
+from pydantic import BaseModel, Field
 
 # Load environment variables from .env file
 load_dotenv()
@@ -17,6 +19,12 @@ app = FastAPI(title="BizSproutAI Brain API")
 
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45.0"))
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT)
+
+def _parse_provider_json(content: str | None) -> Any:
+    if content is None:
+        raise ValueError("Provider returned an empty response.")
+    return json.loads(content)
+
 
 allowed_origins_env = os.getenv(
     "ALLOWED_ORIGINS",
@@ -206,7 +214,7 @@ async def internal_generate_roadmap(idea: str, region: str, biz_type: str):
             temperature=0.4,
             response_format={"type": "json_object"}
         )
-        return json.loads(response.choices[0].message.content)
+        return _parse_provider_json(response.choices[0].message.content)
     except Exception as e:
         print(f"Internal Roadmap Error: {e}")
         return None
@@ -226,7 +234,7 @@ async def validate_idea(request: ValidationRequest, raw_req: Request):
             ],
             response_format={"type": "json_object"}
         )
-        return json.loads(response.choices[0].message.content)
+        return _parse_provider_json(response.choices[0].message.content)
     except Exception as e:
         print(f"Validation endpoint error: {e}")
         raise HTTPException(status_code=500, detail="Failed to validate business idea. Please try again.") from e
@@ -271,7 +279,7 @@ async def generate_report(request: ReportRequest, raw_req: Request):
             temperature=0.3,
             response_format={"type": "json_object"}
         )
-        return json.loads(response.choices[0].message.content)
+        return _parse_provider_json(response.choices[0].message.content)
 
     except Exception as e:
         print(f"Report Error: {e}")
