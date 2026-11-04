@@ -33,25 +33,68 @@ jobs:
           python -m pip install -r requirements.lock.txt -r requirements-dev.txt
           python -m pip check
       - name: Audit locked runtime dependencies
+        id: dependency-audit
+        continue-on-error: true
         run: pip-audit -r requirements.lock.txt --no-deps --disable-pip
       - name: Ruff lint
+        id: ruff-lint
+        continue-on-error: true
         run: ruff check .
       - name: Ruff format check
+        id: ruff-format
+        continue-on-error: true
         run: ruff format --check .
       - name: Mypy
+        id: mypy
+        continue-on-error: true
         run: mypy main.py
       - name: Python syntax check
+        id: compile
+        continue-on-error: true
         run: python -m py_compile main.py
       - name: FastAPI app import smoke test
+        id: app-import
+        continue-on-error: true
         run: python -c "from main import app; print('App initialized successfully:', app.title)"
         env:
           OPENAI_API_KEY: "mock-key-for-ci"
           ENDPOINT_API_KEY: "ci-endpoint-key"
       - name: Unit tests
+        id: pytest
+        continue-on-error: true
         run: pytest -q
         env:
           OPENAI_API_KEY: "mock-key-for-ci"
           ENDPOINT_API_KEY: "ci-endpoint-key"
+      - name: Enforce all Python quality outcomes
+        if: always()
+        env:
+          AUDIT_RESULT: ${{ steps.dependency-audit.outcome }}
+          RUFF_LINT_RESULT: ${{ steps.ruff-lint.outcome }}
+          RUFF_FORMAT_RESULT: ${{ steps.ruff-format.outcome }}
+          MYPY_RESULT: ${{ steps.mypy.outcome }}
+          COMPILE_RESULT: ${{ steps.compile.outcome }}
+          APP_IMPORT_RESULT: ${{ steps.app-import.outcome }}
+          PYTEST_RESULT: ${{ steps.pytest.outcome }}
+        run: |
+          {
+            echo "## Python Quality Results"
+            echo
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Dependency audit | $AUDIT_RESULT |"
+            echo "| Ruff lint | $RUFF_LINT_RESULT |"
+            echo "| Ruff format | $RUFF_FORMAT_RESULT |"
+            echo "| Mypy | $MYPY_RESULT |"
+            echo "| Python compile | $COMPILE_RESULT |"
+            echo "| FastAPI import | $APP_IMPORT_RESULT |"
+            echo "| pytest | $PYTEST_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$AUDIT_RESULT" != "success" || "$RUFF_LINT_RESULT" != "success" || "$RUFF_FORMAT_RESULT" != "success" || "$MYPY_RESULT" != "success" || "$COMPILE_RESULT" != "success" || "$APP_IMPORT_RESULT" != "success" || "$PYTEST_RESULT" != "success" ]]; then
+            echo "::error::One or more mandatory Python quality checks failed."
+            exit 1
+          fi
+          echo "All mandatory Python quality checks passed."
 
   required-ci:
     name: required-ci
