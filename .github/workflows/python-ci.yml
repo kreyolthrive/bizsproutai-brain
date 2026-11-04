@@ -98,16 +98,16 @@ jobs:
 
   required-ci:
     name: required-ci
-    if: always()
+    if: ${{ always() && github.event_name == 'pull_request' }}
     needs: [python-quality]
     runs-on: ubuntu-24.04
     steps:
-      - name: Enforce mandatory Python checks
+      - name: Enforce mandatory Python PR checks
         env:
           PYTHON_QUALITY_RESULT: ${{ needs.python-quality.result }}
         run: |
           {
-            echo "## Required CI"
+            echo "## Required CI — Pull Request"
             echo
             echo "| Mandatory workflow | Result |"
             echo "|---|---|"
@@ -117,4 +117,27 @@ jobs:
             echo "::error::Required CI is blocked: Python quality checks failed, were cancelled, or were skipped."
             exit 1
           fi
-          echo "All mandatory Python checks passed."
+          echo "All mandatory Python PR checks passed."
+
+  push-ci:
+    name: push-ci
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    needs: [python-quality]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Enforce mandatory Python push checks
+        env:
+          PYTHON_QUALITY_RESULT: ${{ needs.python-quality.result }}
+        run: |
+          {
+            echo "## Push CI"
+            echo
+            echo "| Mandatory workflow | Result |"
+            echo "|---|---|"
+            echo "| Python Quality, Type & Tests | $PYTHON_QUALITY_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$PYTHON_QUALITY_RESULT" != "success" ]]; then
+            echo "::error::Push CI failed: Python quality checks failed, were cancelled, or were skipped."
+            exit 1
+          fi
+          echo "All mandatory Python push checks passed."
