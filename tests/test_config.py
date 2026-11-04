@@ -6,39 +6,52 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _run_import_with_env(env_overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def run_import(env_overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    env.pop("OPENAI_MODEL", None)
+    env.pop("OPENAI_TIMEOUT_SECONDS", None)
     env.update(env_overrides)
     return subprocess.run(
         [
             sys.executable,
             "-c",
-            "import main; print('backend', main.RATE_LIMIT_BACKEND, 'limiter', main.RATE_LIMITER is None)",
+            "import main; print('model', main.OPENAI_MODEL, 'timeout', main.OPENAI_TIMEOUT)",
         ],
         cwd=ROOT,
         env=env,
         text=True,
         capture_output=True,
+        check=False,
     )
 
 
-def test_rate_limit_backend_none_imports_successfully():
-    result = _run_import_with_env(
-        {
-            "OPENAI_API_KEY": "test-openai-key",
-            "RATE_LIMIT_BACKEND": "none",
-        }
-    )
+def test_default_model_and_timeout_are_loaded():
+    result = run_import({"OPENAI_API_KEY": "test-openai-key"})
+
     assert result.returncode == 0
-    assert "backend none limiter True" in result.stdout
+    assert "model gpt-4o-mini timeout 45.0" in result.stdout
 
 
-def test_rate_limit_backend_unsupported_fails_import():
-    result = _run_import_with_env(
+def test_model_and_timeout_can_be_overridden_by_environment():
+    result = run_import(
         {
             "OPENAI_API_KEY": "test-openai-key",
-            "RATE_LIMIT_BACKEND": "redis",
+            "OPENAI_MODEL": "test-model",
+            "OPENAI_TIMEOUT_SECONDS": "12.5",
         }
     )
+
+    assert result.returncode == 0
+    assert "model test-model timeout 12.5" in result.stdout
+
+
+def test_invalid_timeout_prevents_application_import():
+    result = run_import(
+        {
+            "OPENAI_API_KEY": "test-openai-key",
+            "OPENAI_TIMEOUT_SECONDS": "not-a-number",
+        }
+    )
+
     assert result.returncode != 0
-    assert "Unsupported RATE_LIMIT_BACKEND" in result.stderr
+    assert "ValueError" in result.stderr
