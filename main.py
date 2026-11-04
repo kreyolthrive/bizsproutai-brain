@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
-from collections import defaultdict
 import json
 import time
 import os
@@ -230,7 +229,7 @@ async def validate_idea(request: ValidationRequest, raw_req: Request):
         return json.loads(response.choices[0].message.content)
     except Exception as e:
         print(f"Validation endpoint error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to validate business idea. Please try again.")
+        raise HTTPException(status_code=500, detail="Failed to validate business idea. Please try again.") from e
 
 @app.post("/api/generate_roadmap")
 async def generate_roadmap(request: RoadmapRequest, raw_req: Request):
@@ -276,7 +275,7 @@ async def generate_report(request: ReportRequest, raw_req: Request):
 
     except Exception as e:
         print(f"Report Error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate diligence report.")
+        raise HTTPException(status_code=500, detail="Failed to generate diligence report.") from e
 
 @app.get("/")
 def home():
