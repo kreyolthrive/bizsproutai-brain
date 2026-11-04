@@ -20,6 +20,7 @@ app = FastAPI(title="BizSproutAI Brain API")
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45.0"))
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT)
 
+
 def _parse_provider_json(content: str | None) -> Any:
     if content is None:
         raise ValueError("Provider returned an empty response.")
@@ -47,6 +48,7 @@ MAX_REQUESTS_PER_WINDOW = 10  # Max 10 requests per minute per IP
 LAST_CLEANUP_TIME = time.time()
 CLEANUP_INTERVAL = 300  # Prune expired IP records every 5 minutes
 
+
 def get_real_client_ip(req: Request) -> str:
     # 1. Cloudflare Connecting IP header (highest trust when routed via Cloudflare)
     cf_ip = req.headers.get("cf-connecting-ip")
@@ -64,16 +66,19 @@ def get_real_client_ip(req: Request) -> str:
             return ips[-1]
     return req.client.host if req.client else "unknown"
 
+
 def cleanup_stale_history(now: float):
     global LAST_CLEANUP_TIME
     if now - LAST_CLEANUP_TIME > CLEANUP_INTERVAL:
         stale_keys = [
-            ip for ip, timestamps in REQUEST_HISTORY.items()
+            ip
+            for ip, timestamps in REQUEST_HISTORY.items()
             if not timestamps or (now - timestamps[-1] >= RATE_LIMIT_WINDOW)
         ]
         for ip in stale_keys:
             REQUEST_HISTORY.pop(ip, None)
         LAST_CLEANUP_TIME = now
+
 
 def enforce_rate_limit(req: Request):
     client_ip = get_real_client_ip(req)
@@ -87,19 +92,21 @@ def enforce_rate_limit(req: Request):
     if len(valid_timestamps) >= MAX_REQUESTS_PER_WINDOW:
         REQUEST_HISTORY[client_ip] = valid_timestamps
         raise HTTPException(
-            status_code=429,
-            detail="Rate limit exceeded. Please wait a moment before trying again."
+            status_code=429, detail="Rate limit exceeded. Please wait a moment before trying again."
         )
 
     valid_timestamps.append(now)
     REQUEST_HISTORY[client_ip] = valid_timestamps
 
+
 # Default model (can be overridden via OPENAI_MODEL env var)
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
 
 # --- MODELS ---
 class ValidationRequest(BaseModel):
     idea: str = Field(..., min_length=5, max_length=1000, description="Business idea text")
+
 
 class RoadmapRequest(BaseModel):
     validated_idea: str = Field(..., min_length=5, max_length=1000)
@@ -107,11 +114,13 @@ class RoadmapRequest(BaseModel):
     business_type: str = Field(..., min_length=1, max_length=100)
     email: str | None = Field(None, max_length=255)
 
+
 class ReportRequest(BaseModel):
     validated_idea: str = Field(..., min_length=5, max_length=1000)
     region: str = Field(..., min_length=1, max_length=100)
     business_type: str = Field(..., min_length=1, max_length=100)
     roadmap_data: dict | None = None
+
 
 # --- PROMPTS ---
 
@@ -200,6 +209,7 @@ You are writing a "Due Diligence Report". You MUST use the provided [Roadmap Pla
 }
 """
 
+
 # --- INTERNAL HELPERS ---
 async def internal_generate_roadmap(idea: str, region: str, biz_type: str):
     """Generates roadmap silently if missing."""
@@ -209,17 +219,19 @@ async def internal_generate_roadmap(idea: str, region: str, biz_type: str):
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": ROADMAP_ARCHITECT_PROMPT},
-                {"role": "user", "content": user_context}
+                {"role": "user", "content": user_context},
             ],
             temperature=0.4,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
         return _parse_provider_json(response.choices[0].message.content)
     except Exception as e:
         print(f"Internal Roadmap Error: {e}")
         return None
 
+
 # --- ROUTES ---
+
 
 @app.post("/api/validate")
 async def validate_idea(request: ValidationRequest, raw_req: Request):
@@ -230,14 +242,16 @@ async def validate_idea(request: ValidationRequest, raw_req: Request):
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": VALIDATION_PROMPT},
-                {"role": "user", "content": f"<user_idea>{request.idea}</user_idea>"}
+                {"role": "user", "content": f"<user_idea>{request.idea}</user_idea>"},
             ],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
         return _parse_provider_json(response.choices[0].message.content)
     except Exception as e:
         print(f"Validation endpoint error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to validate business idea. Please try again.") from e
+        raise HTTPException(
+            status_code=500, detail="Failed to validate business idea. Please try again."
+        ) from e
 
 @app.post("/api/generate_roadmap")
 async def generate_roadmap(request: RoadmapRequest, raw_req: Request):
@@ -248,6 +262,7 @@ async def generate_roadmap(request: RoadmapRequest, raw_req: Request):
         raise HTTPException(status_code=500, detail="Failed to generate localized roadmap.")
     return data
 
+
 @app.post("/api/generate_report")
 async def generate_report(request: ReportRequest, raw_req: Request):
     enforce_rate_limit(raw_req)
@@ -257,7 +272,9 @@ async def generate_report(request: ReportRequest, raw_req: Request):
     current_roadmap = request.roadmap_data
     if not current_roadmap:
         print("Roadmap missing. Generating internally...")
-        current_roadmap = await internal_generate_roadmap(request.validated_idea, request.region, request.business_type)
+        current_roadmap = await internal_generate_roadmap(
+            request.validated_idea, request.region, request.business_type
+        )
 
     # 2. INJECT INTO PROMPT
     roadmap_str = json.dumps(current_roadmap) if current_roadmap else "Standard Setup"
@@ -274,10 +291,10 @@ async def generate_report(request: ReportRequest, raw_req: Request):
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": REPORT_GENERATOR_PROMPT},
-                {"role": "user", "content": user_context}
+                {"role": "user", "content": user_context},
             ],
             temperature=0.3,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
         return _parse_provider_json(response.choices[0].message.content)
 
