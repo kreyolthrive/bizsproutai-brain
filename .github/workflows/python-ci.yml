@@ -44,6 +44,10 @@ jobs:
         id: ruff-format
         continue-on-error: true
         run: ruff format --check .
+      - name: Diagnostic Ruff format diff
+        if: always()
+        continue-on-error: true
+        run: ruff format --diff main.py tests/test_api.py
       - name: Mypy
         id: mypy
         continue-on-error: true
